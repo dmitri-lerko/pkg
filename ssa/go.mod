@@ -1,4 +1,4 @@
-module github.com/fluxcd/pkg/ssa
+module github.com/dmitri-lerko/pkg/ssa
 
 go 1.17
 
