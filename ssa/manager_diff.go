@@ -152,9 +152,9 @@ func (m *ResourceManager) hasDrifted(existingObject, dryRunObject *unstructured.
 		return true
 	}
 
-	if !apiequality.Semantic.DeepEqual(dryRunObject.GetAnnotations(), existingObject.GetAnnotations()) {
-		return true
-	}
+// 	if !apiequality.Semantic.DeepEqual(dryRunObject.GetAnnotations(), existingObject.GetAnnotations()) {
+// 		return true
+// 	}
 
 	return hasObjectDrifted(dryRunObject, existingObject)
 }
