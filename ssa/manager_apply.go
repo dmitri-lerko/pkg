@@ -108,6 +108,9 @@ func (m *ResourceManager) Apply(ctx context.Context, object *unstructured.Unstru
 	// Merge Workload Identity annotation with source controlled version
 	if existingObject.GetAnnotations()["iam.gke.io/gcp-service-account"] != "" {
 		annotations := appliedObject.GetAnnotations()
+		if len(annotations) == 0 {
+			annotations = make(map[string]string)
+		}
 		annotations["iam.gke.io/gcp-service-account"] = existingObject.GetAnnotations()["iam.gke.io/gcp-service-account"]
 		appliedObject.SetAnnotations(annotations)
 	}
@@ -160,6 +163,9 @@ func (m *ResourceManager) ApplyAll(ctx context.Context, objects []*unstructured.
 		// Merge Workload Identity annotation with source controlled version
 		if existingObject.GetAnnotations()["iam.gke.io/gcp-service-account"] != "" {
 			annotations := dryRunObject.GetAnnotations()
+			if len(annotations) == 0 {
+				annotations = make(map[string]string)
+			}
 			annotations["iam.gke.io/gcp-service-account"] = existingObject.GetAnnotations()["iam.gke.io/gcp-service-account"]
 			dryRunObject.SetAnnotations(annotations)
 			object.SetAnnotations(annotations)
