@@ -162,6 +162,7 @@ func (m *ResourceManager) ApplyAll(ctx context.Context, objects []*unstructured.
 			annotations := dryRunObject.GetAnnotations()
 			annotations["iam.gke.io/gcp-service-account"] = existingObject.GetAnnotations()["iam.gke.io/gcp-service-account"]
 			dryRunObject.SetAnnotations(annotations)
+			object.SetAnnotations(annotations)
 		}
 
 		if patched || m.hasDrifted(existingObject, dryRunObject) {
