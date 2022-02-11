@@ -105,6 +105,13 @@ func (m *ResourceManager) Apply(ctx context.Context, object *unstructured.Unstru
 	}
 
 	appliedObject := object.DeepCopy()
+	// Merge Workload Identity annotation with source controlled version
+	if existingObject.GetAnnotations()["iam.gke.io/gcp-service-account"] != "" {
+		annotations := appliedObject.GetAnnotations()
+		annotations["iam.gke.io/gcp-service-account"] = existingObject.GetAnnotations()["iam.gke.io/gcp-service-account"]
+		appliedObject.SetAnnotations(annotations)
+	}
+
 	if err := m.apply(ctx, appliedObject); err != nil {
 		return nil, fmt.Errorf("%s apply failed, error: %w", FmtUnstructured(appliedObject), err)
 	}
@@ -148,6 +155,13 @@ func (m *ResourceManager) ApplyAll(ctx context.Context, objects []*unstructured.
 		if err != nil {
 			return nil, fmt.Errorf("%s metadata.managedFields cleanup failed, error: %w",
 				FmtUnstructured(existingObject), err)
+		}
+
+		// Merge Workload Identity annotation with source controlled version
+		if existingObject.GetAnnotations()["iam.gke.io/gcp-service-account"] != "" {
+			annotations := dryRunObject.GetAnnotations()
+			annotations["iam.gke.io/gcp-service-account"] = existingObject.GetAnnotations()["iam.gke.io/gcp-service-account"]
+			dryRunObject.SetAnnotations(annotations)
 		}
 
 		if patched || m.hasDrifted(existingObject, dryRunObject) {
