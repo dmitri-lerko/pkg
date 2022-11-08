@@ -17,8 +17,11 @@ limitations under the License.
 package client
 
 import (
+	"context"
+
 	"github.com/spf13/pflag"
 	"k8s.io/client-go/rest"
+	"sigs.k8s.io/cli-utils/pkg/flowcontrol"
 	ctrl "sigs.k8s.io/controller-runtime"
 )
 
@@ -46,24 +49,35 @@ const (
 //		restConfig := client.GetConfigOrDie(clientOptions)
 //	}
 type Options struct {
-	// QPS indicates the maximum queries-per-second of requests sent to to the Kubernetes API, defaults to 20.
+	// QPS indicates the maximum queries-per-second of requests sent to the Kubernetes API, defaults to 50.
 	QPS float32
 
-	// Burst indicates the maximum burst queries-per-second of requests sent to the Kubernetes API, defaults to 50.
+	// Burst indicates the maximum burst queries-per-second of requests sent to the Kubernetes API, defaults to 100.
 	Burst int
 }
 
 // BindFlags will parse the given pflag.FlagSet for Kubernetes client option flags and set the Options accordingly.
 func (o *Options) BindFlags(fs *pflag.FlagSet) {
-	fs.Float32Var(&o.QPS, flagQPS, 20.0,
+	fs.Float32Var(&o.QPS, flagQPS, 50.0,
 		"The maximum queries-per-second of requests sent to the Kubernetes API.")
-	fs.IntVar(&o.Burst, flagBurst, 50,
+	fs.IntVar(&o.Burst, flagBurst, 100,
 		"The maximum burst queries-per-second of requests sent to the Kubernetes API.")
 }
 
-// GetConfigOrDie wraps ctrl.GetConfigOrDie and sets the configured Options, returning the modified rest.Config.
+// GetConfigOrDie wraps ctrl.GetConfigOrDie and checks if the Kubernetes apiserver
+// has PriorityAndFairness flow control filter enabled. If true, it returns a rest.Config
+// with client side throttling disabled. Otherwise, it returns a modified rest.Config
+// configured with the provided Options.
 func GetConfigOrDie(opts Options) *rest.Config {
 	config := ctrl.GetConfigOrDie()
+	enabled, err := flowcontrol.IsEnabled(context.Background(), config)
+	if err == nil && enabled {
+		// A negative QPS and Burst indicates that the client should not have a rate limiter.
+		// Ref: https://github.com/kubernetes/kubernetes/blob/v1.24.0/staging/src/k8s.io/client-go/rest/config.go#L354-L364
+		config.QPS = -1
+		config.Burst = -1
+		return config
+	}
 	config.QPS = opts.QPS
 	config.Burst = opts.Burst
 	return config

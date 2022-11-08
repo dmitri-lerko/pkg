@@ -25,15 +25,29 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"time"
 
+	securefilepath "github.com/cyphar/filepath-securejoin"
+	"github.com/fluxcd/gitkit"
+	gogit "github.com/fluxcd/go-git/v5"
+	"github.com/fluxcd/go-git/v5/config"
+	"github.com/fluxcd/go-git/v5/plumbing"
+	"github.com/fluxcd/go-git/v5/plumbing/object"
+	"github.com/fluxcd/go-git/v5/storage/memory"
 	"github.com/go-git/go-billy/v5/memfs"
-	gogit "github.com/go-git/go-git/v5"
-	"github.com/go-git/go-git/v5/config"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/object"
-	"github.com/go-git/go-git/v5/storage/memory"
-	"github.com/sosedoff/gitkit"
+
+	"golang.org/x/crypto/ssh"
+)
+
+var (
+	m sync.RWMutex
+
+	// publicKeyLookupFunc defines the function responsible for
+	// authenticating SSH requests. By default accept all public
+	// keys.
+	publicKeyLookupFunc = acceptAllPublicKeys
 )
 
 // NewTempGitServer returns a GitServer with a newly created temp
@@ -61,15 +75,22 @@ func NewGitServer(docroot string) *GitServer {
 	}
 }
 
+// WithSSHConfig sets the ssh.ServerConfig for the SSH Server.
+func (g *GitServer) WithSSHConfig(cfg *ssh.ServerConfig) *GitServer {
+	g.sshServerConfig = cfg
+	return g
+}
+
 // HTTPMiddleware is a git http server middleware.
 type HTTPMiddleware func(http.Handler) http.Handler
 
 // GitServer is a git server for testing purposes.
 // It can serve git repositories over HTTP and SSH.
 type GitServer struct {
-	config     gitkit.Config
-	httpServer *httptest.Server
-	sshServer  *gitkit.SSH
+	config          gitkit.Config
+	sshServerConfig *ssh.ServerConfig
+	httpServer      *httptest.Server
+	sshServer       *gitkit.SSH
 	// Set these to configure HTTP auth
 	username, password string
 	httpMiddlewares    []HTTPMiddleware
@@ -97,12 +118,12 @@ func (s *GitServer) KeyDir(dir string) *GitServer {
 // InstallUpdateHook installs a hook script that will run running
 // _before_ a push is accepted, as described at
 //
-//    https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks
+//	https://git-scm.com/book/en/v2/Customizing-Git-Git-Hooks
 //
 // The provided string is written as an executable script to the hooks
 // directory; start with a hashbang to make sure it'll run, e.g.,
 //
-//     #!/bin/bash
+//	#!/bin/bash
 func (s *GitServer) InstallUpdateHook(script string) *GitServer {
 	if s.config.Hooks == nil {
 		s.config.Hooks = &gitkit.HookScripts{}
@@ -183,17 +204,38 @@ func (s *GitServer) StopHTTP() {
 	return
 }
 
+// PublicKeyLookupFunc sets the function to be used for SSH authentication.
+func (s *GitServer) PublicKeyLookupFunc(f func(content string) (*gitkit.PublicKey, error)) {
+	publicKeyLookupFunc = f
+}
+
+// acceptAllPublicKeys represents the default function for authenticating SSH
+// requests. It accept all public keys and sets PublicKey Id to 'test-user'.
+func acceptAllPublicKeys(content string) (*gitkit.PublicKey, error) {
+	return &gitkit.PublicKey{Id: "test-user"}, nil
+}
+
 // ListenSSH creates an SSH server and a listener if not already
 // created, but does not handle connections. This returns immediately,
 // unlike StartSSH(), and the server URL is available with
 // SSHAddress() after calling this.
 func (s *GitServer) ListenSSH() error {
-	if s.sshServer == nil {
+	m.RLock()
+	sshServer := s.sshServer
+	m.RUnlock()
+
+	if sshServer == nil {
+		m.Lock()
+		defer m.Unlock()
 		s.sshServer = gitkit.NewSSH(s.config)
-		// This is where authentication would happen, when needed.
-		s.sshServer.PublicKeyLookupFunc = func(content string) (*gitkit.PublicKey, error) {
-			return &gitkit.PublicKey{Id: "test-user"}, nil
+
+		if s.sshServerConfig != nil {
+			s.sshServer.SetSSHConfig(s.sshServerConfig)
 		}
+
+		// This is where authentication would happen, when needed.
+		s.sshServer.PublicKeyLookupFunc = publicKeyLookupFunc
+
 		// :0 should result in an OS assigned free port; 127.0.0.1
 		// forces the lowest common denominator of TCPv4 on localhost.
 		return s.sshServer.Listen("127.0.0.1:0")
@@ -216,10 +258,24 @@ func (s *GitServer) StartSSH() error {
 
 // StopSSH stops the SSH git server.
 func (s *GitServer) StopSSH() error {
-	if s.sshServer != nil {
-		return s.sshServer.Stop()
+	m.RLock()
+	sshServer := s.sshServer
+	m.RUnlock()
+
+	if sshServer != nil {
+		return sshServer.Stop()
 	}
 	return nil
+}
+
+// ReadOnly sets the current connection to read-only.
+// This simulates when users don't have write access,
+// and the server ungracefully short-circuit the
+// connection which may lead to EOF/early EOF at the
+// client side.
+func (s *GitServer) ReadOnly(readOnly bool) *GitServer {
+	s.config.ReadOnly = readOnly
+	return s
 }
 
 // Root returns the repositories root directory.
@@ -269,8 +325,12 @@ func (s *GitServer) SSHAddress() string {
 // fixture at the repoPath.
 func (s *GitServer) InitRepo(fixture, branch, repoPath string) error {
 	// Create a bare repo to initialize.
-	localRepo := filepath.Join(s.Root(), repoPath)
-	_, err := gogit.PlainInit(localRepo, true)
+	localRepo, err := securefilepath.SecureJoin(s.Root(), repoPath)
+	if err != nil {
+		return err
+	}
+
+	_, err = gogit.PlainInit(localRepo, true)
 	if err != nil {
 		return err
 	}
@@ -283,12 +343,28 @@ func (s *GitServer) InitRepo(fixture, branch, repoPath string) error {
 	}
 
 	// Add a remote to the local repo.
-	localRepoURL := getLocalURL(localRepo)
-	if _, err = repo.CreateRemote(&config.RemoteConfig{
-		Name: gogit.DefaultRemoteName,
-		URLs: []string{localRepoURL},
-	}); err != nil {
-		return err
+	// Due to a bug in go-git, using the file protocol to push on Windows fails
+	// ref: https://github.com/go-git/go-git/issues/415
+	// Hence, we start a server and use the HTTP protocol to push _only_ on Windows.
+	if runtime.GOOS == "windows" {
+		if err = s.StartHTTP(); err != nil {
+			return err
+		}
+		defer s.StopHTTP()
+		if _, err = repo.CreateRemote(&config.RemoteConfig{
+			Name: gogit.DefaultRemoteName,
+			URLs: []string{s.HTTPAddressWithCredentials() + "/" + repoPath},
+		}); err != nil {
+			return err
+		}
+	} else {
+		localRepoURL := getLocalURL(localRepo)
+		if _, err = repo.CreateRemote(&config.RemoteConfig{
+			Name: gogit.DefaultRemoteName,
+			URLs: []string{localRepoURL},
+		}); err != nil {
+			return err
+		}
 	}
 
 	if err := commitFromFixture(repo, fixture); err != nil {
@@ -375,7 +451,9 @@ func checkout(repo *gogit.Repository, branch string) error {
 }
 
 func getLocalURL(localPath string) string {
-	return fmt.Sprintf("file://%s", localPath)
+	// Three slashes after "file:", since we don't specify a host.
+	// Ref: https://en.wikipedia.org/wiki/File_URI_scheme#How_many_slashes?
+	return fmt.Sprintf("file:///%s", localPath)
 }
 
 // buildHTTPHandler chains a given http handler with the given middlewares.

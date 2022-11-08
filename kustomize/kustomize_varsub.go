@@ -41,9 +41,10 @@ const (
 )
 
 const (
-	postBuildField      = "postBuild"
-	substituteFromField = "substituteFrom"
-	substituteField     = "substitute"
+	postBuildField          = "postBuild"
+	substituteFromField     = "substituteFrom"
+	substituteField         = "substitute"
+	substituteAnnotationKey = "kustomize.toolkit.fluxcd.io/substitute"
 )
 
 // SubstituteVariables replaces the vars with their values in the specified resource.
@@ -59,9 +60,7 @@ func SubstituteVariables(
 		return nil, err
 	}
 
-	key := fmt.Sprintf("%s/substitute", kustomization.GetObjectKind().GroupVersionKind().Group)
-
-	if res.GetLabels()[key] == DisabledValue || res.GetAnnotations()[key] == DisabledValue {
+	if res.GetLabels()[substituteAnnotationKey] == DisabledValue || res.GetAnnotations()[substituteAnnotationKey] == DisabledValue {
 		return nil, nil
 	}
 

@@ -54,3 +54,32 @@ type NamespacedObjectKindReference struct {
 	// +optional
 	Namespace string `json:"namespace,omitempty"`
 }
+
+// SecretKeyReference contains enough information to locate the referenced Kubernetes Secret object in the same
+// namespace. Optionally a key can be specified.
+// Use this type instead of core/v1 SecretKeySelector when the Key is optional and the Optional field is not
+// applicable.
+type SecretKeyReference struct {
+	// Name of the Secret.
+	// +required
+	Name string `json:"name"`
+
+	// Key in the Secret, when not specified an implementation-specific default key is used.
+	// +optional
+	Key string `json:"key,omitempty"`
+}
+
+// KubeConfigReference contains enough information to locate the referenced
+// Kubernetes secret that contains a kubeconfig file.
+type KubeConfigReference struct {
+	// SecretRef holds the name of a secret that contains a key with
+	// the kubeconfig file as the value. If no key is set, the key will default
+	// to 'value'.
+	// It is recommended that the kubeconfig is self-contained, and the secret
+	// is regularly updated if credentials such as a cloud-access-token expire.
+	// Cloud specific `cmd-path` auth helpers will not function without adding
+	// binaries and credentials to the Pod that is responsible for reconciling
+	// Kubernetes resources.
+	// +required
+	SecretRef SecretKeyReference `json:"secretRef"`
+}
